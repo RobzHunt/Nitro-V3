@@ -1,0 +1,132 @@
+name: Build avatar effect icon pack
+
+on:
+  push:
+    branches:
+      - automation/effect-icon-pack-20260715
+    paths:
+      - '.github/workflows/build-effect-icon-pack.yml'
+      - 'tools/effect-icons/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout temporary branch
+        uses: actions/checkout@v4
+
+      - name: Download original effect icons
+        shell: python
+        run: |
+          import json
+          import time
+          import urllib.error
+          import urllib.request
+          import zipfile
+          from pathlib import Path
+
+          ids = [
+              int(line.strip())
+              for line in Path('tools/effect-icons/effect_ids.txt').read_text(encoding='utf-8').splitlines()
+              if line.strip()
+          ]
+
+          output = Path('artifact/assets/effects')
+          output.mkdir(parents=True, exist_ok=True)
+
+          sources = [
+              ('xnumad/HabboSwfOpenSource', 'e173433730a13c8321269e4ad4a797af1e4d0eb7', 'src/images/HabboInventoryCom_fx_icon_{id}_png.png'),
+              ('habboevil/HabboSwfOpenSource', '6c2ac0ecedbe05447a537955b8e6e4fee84b9e73', 'src/images/HabboInventoryCom_fx_icon_{id}_png.png'),
+              ('Domexx/SWF-Source-Clean-MS', '6a1d87045dcc8712ad58a9b1329724cbfd4106bc', 'src/images/HabboInventoryCom_fx_icon_{id}_png.png'),
+              ('krewsarchive/cleaned-up-swf-source', 'a9562845d2c992b51bbe68f6a8c7515084a0ab59', 'src/images/HabboInventoryCom_fx_icon_{id}_png.png'),
+              ('habbo-cc/Habbo-Sky', 'feature-air', 'src/images/HabboInventoryCom_fx_icon_{id}_png.png'),
+              ('ntuative/habbo-2021', 'a51e624db9ffc585ca0950e5aab4a61405ca4e31', 'src/images/HabboInventoryCom_fx_icon_{id}_png.png'),
+              ('ntuative/habbo-2021', 'a51e624db9ffc585ca0950e5aab4a61405ca4e31', 'src/images/HabboHabboInventoryCom_fx_icon_{id}_png.png'),
+              ('ntuative/habbo-2021', 'a51e624db9ffc585ca0950e5aab4a61405ca4e31', 'src/HabboHabboInventoryCom_fx_icon_{id}_png.png'),
+              ('necm1/habbo-2021', 'fa9ac0f9c8302e4ea36f927aa2464a307047e693', 'src/images/HabboInventoryCom_fx_icon_{id}_png.png'),
+              ('necm1/habbo-2021', 'fa9ac0f9c8302e4ea36f927aa2464a307047e693', 'src/images/HabboHabboInventoryCom_fx_icon_{id}_png.png'),
+          ]
+
+          headers = {'User-Agent': 'MetaHotel-effect-icon-builder/1.0'}
+          found = {}
+          missing = []
+
+          def fetch(url: str) -> bytes | None:
+              request = urllib.request.Request(url, headers=headers)
+              try:
+                  with urllib.request.urlopen(request, timeout=20) as response:
+                      data = response.read()
+              except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError):
+                  return None
+              return data if data.startswith(b'\x89PNG\r\n\x1a\n') else None
+
+          for position, effect_id in enumerate(ids, start=1):
+              target = output / f'fx_icon_{effect_id}.png'
+              for repository, ref, template in sources:
+                  path = template.format(id=effect_id)
+                  url = f'https://raw.githubusercontent.com/{repository}/{ref}/{path}'
+                  data = fetch(url)
+                  if data:
+                      target.write_bytes(data)
+                      found[str(effect_id)] = {
+                          'repository': repository,
+                          'ref': ref,
+                          'path': path,
+                          'bytes': len(data),
+                      }
+                      break
+              else:
+                  missing.append(effect_id)
+
+              print(f'[{position:03d}/{len(ids):03d}] effect {effect_id}: ' + ('OK' if target.exists() else 'MISSING'))
+              time.sleep(0.02)
+
+          manifest = {
+              'requested_unique_ids': ids,
+              'requested_count': len(ids),
+              'downloaded_count': len(found),
+              'missing_count': len(missing),
+              'missing_ids': missing,
+              'sources': found,
+          }
+
+          Path('artifact/MANIFESTO.json').write_text(
+              json.dumps(manifest, ensure_ascii=False, indent=2) + '\n',
+              encoding='utf-8',
+          )
+          Path('artifact/ICONES_AUSENTES.txt').write_text(
+              ('Nenhum.\n' if not missing else '\n'.join(map(str, missing)) + '\n'),
+              encoding='utf-8',
+          )
+          Path('artifact/LEIA-ME.txt').write_text(
+              'Pacote de ícones de efeitos do Meta Hotel.\n'
+              f'IDs únicos solicitados: {len(ids)}\n'
+              f'Ícones originais localizados: {len(found)}\n'
+              f'IDs sem arquivo original localizado: {len(missing)}\n\n'
+              'Destino: public/assets/effects/\n'
+              'Padrão: fx_icon_ID.png\n',
+              encoding='utf-8',
+          )
+
+          with zipfile.ZipFile('MetaHotel_Icones_Efeitos_Originais.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
+              for file_path in sorted(Path('artifact').rglob('*')):
+                  if file_path.is_file():
+                      archive.write(file_path, Path('MetaHotel_Icones_Efeitos_Originais') / file_path.relative_to('artifact'))
+
+          print(json.dumps(manifest, ensure_ascii=False, indent=2))
+
+      - name: Upload icon pack
+        uses: actions/upload-artifact@v4
+        with:
+          name: MetaHotel-Effect-Icons
+          path: |
+            MetaHotel_Icones_Efeitos_Originais.zip
+            artifact/
+          if-no-files-found: error
+          retention-days: 1
